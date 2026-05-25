@@ -251,11 +251,56 @@
 
         .btn-reset:hover { background: var(--btn-hover); }
 
+        .page-link {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            min-width: 62px;
+            height: 32px;
+            padding: 0 10px;
+            border-radius: var(--radius-sm);
+            border: 1px solid var(--border);
+            background: var(--btn-bg);
+            color: var(--text-primary);
+            text-decoration: none;
+            font-size: 0.72rem;
+            font-weight: 600;
+            transition: background var(--transition), border-color var(--transition);
+        }
+
+        .page-link:hover { background: var(--btn-hover); }
+
+        .hidden { display: none !important; }
+
         /* ===== Line Controls ===== */
         #line-controls {
             display: flex;
             flex-direction: column;
             gap: 6px;
+        }
+
+        .admin-login {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+
+        .admin-input {
+            width: 100%;
+            height: 36px;
+            padding: 0 10px;
+            border-radius: var(--radius-sm);
+            border: 1px solid var(--border);
+            background: var(--bg-item);
+            color: var(--text-primary);
+            font: inherit;
+            font-size: 0.82rem;
+        }
+
+        .admin-error {
+            min-height: 16px;
+            color: var(--path-color);
+            font-size: 0.72rem;
         }
 
         .line-item {
@@ -570,6 +615,7 @@
                     <p>KVB Pathfinding System</p>
                 </div>
             </div>
+            <a id="mode-link" class="page-link" href="/admin">Admin</a>
             <button id="theme-toggle" title="Chuyển sáng/tối" onclick="toggleTheme()">🌙</button>
         </div>
 
@@ -623,16 +669,31 @@
                 </div>
             </div>
 
-            <!-- Admin Line Controls -->
-            <div class="section-title">⚙ Quản trị tuyến (Admin)</div>
-            <div id="line-controls">
-                <p style="font-size: 0.78rem; color: var(--text-subtle); text-align: center; padding: 12px 0;">
-                    Đang tải danh sách tuyến...
-                </p>
+            <div id="admin-panel" class="hidden">
+                <div class="section-title">⚙ Quản trị tuyến (Admin)</div>
+                <div id="admin-login" class="info-card hidden">
+                    <form class="admin-login" onsubmit="loginAdmin(event)">
+                        <input id="admin-password" class="admin-input" type="password" autocomplete="current-password" placeholder="Admin password">
+                        <button class="btn-reset" type="submit">Đăng nhập</button>
+                        <p id="admin-error" class="admin-error"></p>
+                    </form>
+                </div>
+                <div id="admin-controls" class="hidden">
+                    <button class="btn-reset" onclick="logoutAdmin()">Đăng xuất admin</button>
+                    <div id="line-controls">
+                        <p style="font-size: 0.78rem; color: var(--text-subtle); text-align: center; padding: 12px 0;">
+                            Đang tải danh sách tuyến...
+                        </p>
+                    </div>
+                </div>
             </div>
 
             <!-- Hint -->
-            <p class="hint-text">
+            <p id="user-hint" class="hint-text">
+                💡 Click vào trạm trên bản đồ để chọn điểm đi/đến.<br>
+                🔄 Quản trị tuyến nằm ở trang Admin.
+            </p>
+            <p id="admin-hint" class="hint-text hidden">
                 💡 Click vào trạm trên bản đồ để chọn điểm đi/đến.<br>
                 🔄 Gạt công tắc để vô hiệu hóa/kích hoạt tuyến tàu.
             </p>

@@ -1,4 +1,4 @@
-const API_BASE_URL = "http://localhost:5000/api";
+const API_BASE_URL = `${window.location.origin}/api`;
 
 const TransitAPI = {
     async getNetwork() {
@@ -20,12 +20,42 @@ const TransitAPI = {
         return await response.json();
     },
 
+    async getAdminStatus() {
+        const response = await fetch(`${API_BASE_URL}/admin/status`, {
+            credentials: 'same-origin'
+        });
+        return await response.json();
+    },
+
+    async adminLogin(password) {
+        const response = await fetch(`${API_BASE_URL}/admin/login`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            credentials: 'same-origin',
+            body: JSON.stringify({ password })
+        });
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error || 'Admin login failed');
+        return data;
+    },
+
+    async adminLogout() {
+        const response = await fetch(`${API_BASE_URL}/admin/logout`, {
+            method: 'POST',
+            credentials: 'same-origin'
+        });
+        return await response.json();
+    },
+
     async toggleLine(lineName, disabled) {
         const response = await fetch(`${API_BASE_URL}/admin/toggle-line`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
+            credentials: 'same-origin',
             body: JSON.stringify({ line: lineName, disabled: disabled })
         });
-        return await response.json();
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error || 'Cannot update line');
+        return data;
     }
 };
