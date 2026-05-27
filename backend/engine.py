@@ -62,7 +62,8 @@ class TransitEngine:
                 edge['target'],
                 line=edge['line'],
                 weight=edge['length'],
-                length=edge['length']
+                length=edge['length'],
+                geometry=edge.get('geometry', [])
             )
 
         print(f"Loaded graph with {self.graph.number_of_nodes()} nodes and {self.graph.number_of_edges()} edges.")
@@ -177,6 +178,21 @@ class TransitEngine:
             node, line = state
             prev_node, prev_line, edge_data, used_line = prev[state]
             length = edge_data.get('length', 0)
+            # Get geometry from edge data, with direction awareness
+            edge_geometry = edge_data.get('geometry', [])
+            # If the edge is stored source->target but we traverse target->source,
+            # reverse the geometry so coordinates flow in the correct direction.
+            if edge_geometry and len(edge_geometry) > 1:
+                # Check if geometry starts closer to prev_node
+                prev_lat = self.graph.nodes[prev_node].get('lat', 0)
+                prev_lon = self.graph.nodes[prev_node].get('lon', 0)
+                geo_start = edge_geometry[0]
+                geo_end = edge_geometry[-1]
+                dist_to_start = (prev_lat - geo_start[0])**2 + (prev_lon - geo_start[1])**2
+                dist_to_end = (prev_lat - geo_end[0])**2 + (prev_lon - geo_end[1])**2
+                if dist_to_end < dist_to_start:
+                    edge_geometry = list(reversed(edge_geometry))
+
             details.append({
                 "from":      prev_node,
                 "to":        node,
@@ -185,6 +201,7 @@ class TransitEngine:
                 "distance":  length,
                 "from_name": self.graph.nodes[prev_node].get('name'),
                 "to_name":   self.graph.nodes[node].get('name'),
+                "geometry":  edge_geometry,
             })
             path_nodes.append(node)
             state = (prev_node, prev_line)
@@ -222,7 +239,8 @@ class TransitEngine:
                 "line": display_line,
                 "line_type": self.classify_line(display_line),
                 "length": data.get('length'),
-                "active": active
+                "active": active,
+                "geometry": data.get('geometry', [])
             })
 
         return {"nodes": nodes, "edges": edges, "disabled_lines": list(self.disabled_lines)}
