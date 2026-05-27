@@ -126,18 +126,29 @@ function renderNetwork() {
     markers = {};
     if (pathLayer) { pathLayer.remove(); pathLayer = null; }
 
-    // Draw edges — colored by line_type
-    networkData.edges.forEach(edge => {
-        const u = networkData.nodes.find(n => n.id === edge.source);
-        const v = networkData.nodes.find(n => n.id === edge.target);
-        if (!u || !v) return;
+    // Build a quick node lookup map for fallback
+    const nodeMap = {};
+    networkData.nodes.forEach(n => { nodeMap[n.id] = n; });
 
+    // Draw edges — colored by line_type, using geometry for curves
+    networkData.edges.forEach(edge => {
         const active  = edge.active !== false;
         const color   = active ? getLineTypeColor(edge.line_type) : INACTIVE_COLOR;
         const weight  = active ? 3 : 1;
         const opacity = active ? 0.75 : 0.15;
 
-        L.polyline([[u.lat, u.lon], [v.lat, v.lon]], { color, weight, opacity }).addTo(map);
+        // Use detailed geometry if available, otherwise fall back to straight line
+        let coords;
+        if (edge.geometry && edge.geometry.length > 0) {
+            coords = edge.geometry; // Already [[lat, lon], ...]
+        } else {
+            const u = nodeMap[edge.source];
+            const v = nodeMap[edge.target];
+            if (!u || !v) return;
+            coords = [[u.lat, u.lon], [v.lat, v.lon]];
+        }
+
+        L.polyline(coords, { color, weight, opacity }).addTo(map);
     });
 
     // Draw station markers
@@ -210,11 +221,37 @@ async function findPath() {
     if (result.success) {
         const pathCoords = [];
         result.details.forEach(step => {
-            const u = networkData.nodes.find(n => n.id === step.from);
-            if (u) pathCoords.push([u.lat, u.lon]);
+            // Use detailed geometry if available for map-matched curves
+            if (step.geometry && step.geometry.length > 0) {
+                step.geometry.forEach((coord, idx) => {
+                    // Avoid duplicating the junction point between segments
+                    if (idx === 0 && pathCoords.length > 0) {
+                        const last = pathCoords[pathCoords.length - 1];
+                        if (last[0] === coord[0] && last[1] === coord[1]) return;
+                    }
+                    pathCoords.push(coord);
+                });
+            } else {
+                // Fallback: straight line from node to node
+                const u = networkData.nodes.find(n => n.id === step.from);
+                if (u) {
+                    if (pathCoords.length === 0 ||
+                        pathCoords[pathCoords.length - 1][0] !== u.lat ||
+                        pathCoords[pathCoords.length - 1][1] !== u.lon) {
+                        pathCoords.push([u.lat, u.lon]);
+                    }
+                }
+            }
         });
+        // Ensure the final destination node is included
         const lastNode = networkData.nodes.find(n => n.id === result.path[result.path.length - 1]);
-        if (lastNode) pathCoords.push([lastNode.lat, lastNode.lon]);
+        if (lastNode) {
+            if (pathCoords.length === 0 ||
+                pathCoords[pathCoords.length - 1][0] !== lastNode.lat ||
+                pathCoords[pathCoords.length - 1][1] !== lastNode.lon) {
+                pathCoords.push([lastNode.lat, lastNode.lon]);
+            }
+        }
 
         if (pathLayer) pathLayer.remove();
         pathLayer = L.polyline(pathCoords, {
