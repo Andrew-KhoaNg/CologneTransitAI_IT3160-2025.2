@@ -13,7 +13,7 @@ def _normalize_line(line):
     return [str(line)]
 
 
-def classify_line(line_name):
+def classify_line(line_name, encoded_unknown_lines=None):
     """Classify a line name into 'rail', 'sub', or 'train'.
     - rail  : named lines (SB-*, Nord-Süd-Stadtbahn, Innenstadttunnel, ...)
     - sub   : numeric 1-99  (KVB Stadtbahn / light-rail, e.g. 18, 20 ...)
@@ -21,6 +21,8 @@ def classify_line(line_name):
     """
     if not line_name or line_name == 'Unknown Line':
         return 'sub'          # default fallback
+    if encoded_unknown_lines and str(line_name) in encoded_unknown_lines:
+        return 'sub'
     try:
         n = int(line_name)
         if 1 <= n <= 99:
@@ -31,11 +33,15 @@ def classify_line(line_name):
 
 
 class TransitEngine:
-    def __init__(self, data_path):
+    def __init__(self, data_path, disabled_lines=None, encoded_unknown_lines=None):
         self.data_path = data_path
         self.graph = nx.Graph()
-        self.disabled_lines = set()
+        self.disabled_lines = set(disabled_lines or [])
+        self.encoded_unknown_lines = set(encoded_unknown_lines or [])
         self.load_network()
+
+    def classify_line(self, line_name):
+        return classify_line(line_name, self.encoded_unknown_lines)
 
     def load_network(self):
         if not os.path.exists(self.data_path):
@@ -75,7 +81,7 @@ class TransitEngine:
         for u, v, data in self.graph.edges(data=True):
             for line in _normalize_line(data.get('line')):
                 if line not in lines:
-                    lines[line] = classify_line(line)
+                    lines[line] = self.classify_line(line)
         result = [{'name': name, 'type': ltype} for name, ltype in lines.items()]
         result.sort(key=lambda x: (x['type'], x['name']))
         return result
@@ -175,6 +181,7 @@ class TransitEngine:
                 "from":      prev_node,
                 "to":        node,
                 "line":      None if used_line == '__unknown__' else used_line,
+                "line_type": self.classify_line(None if used_line == '__unknown__' else used_line),
                 "distance":  length,
                 "from_name": self.graph.nodes[prev_node].get('name'),
                 "to_name":   self.graph.nodes[node].get('name'),
@@ -213,7 +220,7 @@ class TransitEngine:
                 "source": u,
                 "target": v,
                 "line": display_line,
-                "line_type": classify_line(display_line),
+                "line_type": self.classify_line(display_line),
                 "length": data.get('length'),
                 "active": active
             })

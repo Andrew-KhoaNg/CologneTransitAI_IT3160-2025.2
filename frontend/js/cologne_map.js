@@ -4,6 +4,8 @@ let pathLayer = null;
 let markers = {};
 let selectedStart = null;
 let selectedEnd = null;
+let isAdminPage = false;
+let isAdminAuthenticated = false;
 
 // Tile layers for dark/light mode
 window._darkTile  = null;
@@ -27,6 +29,8 @@ function getLineTypeColor(lineType) {
 // ===== Init Map =====
 async function initCologneMap() {
     const savedTheme = localStorage.getItem('kvb-theme') || 'dark';
+    isAdminPage = window.location.pathname.replace(/\/+$/, '') === '/admin';
+    configurePageMode();
 
     map = L.map('map', { zoomControl: true }).setView([50.9375, 6.9603], 13);
 
@@ -51,10 +55,64 @@ async function initCologneMap() {
 
     try {
         await refreshNetwork();
-        await loadLineControls();
+        if (isAdminPage) {
+            await refreshAdminState();
+        }
     } catch (e) {
         console.error("Failed to load network:", e);
     }
+}
+
+function configurePageMode() {
+    const adminPanel = document.getElementById('admin-panel');
+    const modeLink = document.getElementById('mode-link');
+    const userHint = document.getElementById('user-hint');
+    const adminHint = document.getElementById('admin-hint');
+
+    if (modeLink) {
+        modeLink.href = isAdminPage ? '/' : '/admin';
+        modeLink.textContent = isAdminPage ? 'User' : 'Admin';
+    }
+    if (adminPanel) adminPanel.classList.toggle('hidden', !isAdminPage);
+    if (userHint) userHint.classList.toggle('hidden', isAdminPage);
+    if (adminHint) adminHint.classList.toggle('hidden', !isAdminPage);
+}
+
+async function refreshAdminState() {
+    const status = await TransitAPI.getAdminStatus();
+    isAdminAuthenticated = !!status.authenticated;
+    renderAdminAuthState();
+    if (isAdminAuthenticated) {
+        await loadLineControls();
+    }
+}
+
+function renderAdminAuthState() {
+    const loginBox = document.getElementById('admin-login');
+    const controlsBox = document.getElementById('admin-controls');
+    if (loginBox) loginBox.classList.toggle('hidden', isAdminAuthenticated);
+    if (controlsBox) controlsBox.classList.toggle('hidden', !isAdminAuthenticated);
+}
+
+async function loginAdmin(event) {
+    event.preventDefault();
+    const passwordInput = document.getElementById('admin-password');
+    const errorEl = document.getElementById('admin-error');
+    if (errorEl) errorEl.textContent = '';
+
+    try {
+        await TransitAPI.adminLogin(passwordInput.value);
+        passwordInput.value = '';
+        await refreshAdminState();
+    } catch (error) {
+        if (errorEl) errorEl.textContent = error.message;
+    }
+}
+
+async function logoutAdmin() {
+    await TransitAPI.adminLogout();
+    isAdminAuthenticated = false;
+    renderAdminAuthState();
 }
 
 // ===== Network =====
@@ -205,7 +263,7 @@ function renderItinerary(details) {
         if (!cur || cur.line !== line) {
             cur = {
                 line,
-                type: classifyLine(line),
+                type: step.line_type || classifyLine(line),
                 from_name: step.from_name || `ID ${step.from}`,
                 to_name:   step.to_name   || `ID ${step.to}`,
                 distance:  step.distance || 0,
@@ -255,8 +313,12 @@ function renderItinerary(details) {
 
 // ===== Admin Line Controls — grouped by type =====
 async function loadLineControls() {
+    if (!isAdminPage || !isAdminAuthenticated) return;
+
     const linesData = await TransitAPI.getLines();
     const container = document.getElementById('line-controls');
+    if (!container) return;
+
     container.innerHTML = '';
 
     if (!linesData.all_lines || linesData.all_lines.length === 0) {
@@ -303,17 +365,34 @@ async function loadLineControls() {
             const isDisabled = linesData.disabled_lines.includes(line.name);
             const div = document.createElement('div');
             div.className = 'line-item';
-            div.innerHTML = `
-                <div class="line-label">
-                    <div class="line-dot" style="background:${meta.color};"></div>
-                    <span>${line.name}</span>
-                </div>
-                <label class="switch">
-                    <input type="checkbox" ${isDisabled ? '' : 'checked'}
-                           onchange="toggleLine('${line.name}', this.checked)">
-                    <span class="slider"></span>
-                </label>
-            `;
+            const label = document.createElement('div');
+            label.className = 'line-label';
+
+            const dot = document.createElement('div');
+            dot.className = 'line-dot';
+            dot.style.background = meta.color;
+
+            const name = document.createElement('span');
+            name.textContent = line.name;
+
+            label.appendChild(dot);
+            label.appendChild(name);
+
+            const switchLabel = document.createElement('label');
+            switchLabel.className = 'switch';
+
+            const input = document.createElement('input');
+            input.type = 'checkbox';
+            input.checked = !isDisabled;
+            input.addEventListener('change', () => toggleLine(line.name, input.checked));
+
+            const slider = document.createElement('span');
+            slider.className = 'slider';
+
+            switchLabel.appendChild(input);
+            switchLabel.appendChild(slider);
+            div.appendChild(label);
+            div.appendChild(switchLabel);
             wrapper.appendChild(div);
         });
 
@@ -329,7 +408,12 @@ function toggleGroup(type, btn) {
 }
 
 async function toggleLine(lineName, active) {
-    await TransitAPI.toggleLine(lineName, !active);
-    await refreshNetwork();
-    if (selectedStart && selectedEnd) findPath();
+    try {
+        await TransitAPI.toggleLine(lineName, !active);
+        await refreshNetwork();
+        if (selectedStart && selectedEnd) findPath();
+    } catch (error) {
+        alert(error.message);
+        await refreshAdminState();
+    }
 }
