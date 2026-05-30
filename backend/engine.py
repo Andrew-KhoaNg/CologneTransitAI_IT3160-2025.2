@@ -38,6 +38,7 @@ class TransitEngine:
         self.graph = nx.Graph()
         self.disabled_lines = set(disabled_lines or [])
         self.encoded_unknown_lines = set(encoded_unknown_lines or [])
+        self.node_coords = {}
         self.load_network()
 
     def classify_line(self, line_name):
@@ -51,9 +52,16 @@ class TransitEngine:
         with open(self.data_path, 'r', encoding='utf-8') as f:
             data = json.load(f)
 
-        # Add nodes
+        # Add nodes and cache their coordinates for heuristic evaluation
         for node in data['nodes']:
             self.graph.add_node(node['id'], **node)
+            lat = node.get('lat')
+            lon = node.get('lon')
+            if lat is not None and lon is not None:
+                try:
+                    self.node_coords[node['id']] = (float(lat), float(lon))
+                except (TypeError, ValueError):
+                    pass
 
         # Add edges
         for edge in data['edges']:
@@ -76,6 +84,29 @@ class TransitEngine:
         # Edge is disabled only when every line it belongs to is disabled
         return all(line in self.disabled_lines for line in lines)
 
+    @staticmethod
+    def haversine_distance(lat1, lon1, lat2, lon2):
+        """Return great-circle distance between two points in meters."""
+        import math
+        radius = 6371000.0  # Earth radius in meters
+        phi1 = math.radians(lat1)
+        phi2 = math.radians(lat2)
+        dphi = math.radians(lat2 - lat1)
+        dlambda = math.radians(lon2 - lon1)
+        a = math.sin(dphi / 2.0) ** 2 + math.cos(phi1) * math.cos(phi2) * math.sin(dlambda / 2.0) ** 2
+        c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+        return radius * c
+
+    def heuristic(self, node_id, target_node_id):
+        """Admissible heuristic using geographic straight-line distance."""
+        if node_id == target_node_id:
+            return 0.0
+        coords_a = self.node_coords.get(node_id)
+        coords_b = self.node_coords.get(target_node_id)
+        if coords_a is None or coords_b is None:
+            return 0.0
+        return self.haversine_distance(coords_a[0], coords_a[1], coords_b[0], coords_b[1])
+
     def get_all_lines(self):
         """Return sorted list of dicts: {name, type} for each unique line."""
         lines = {}
@@ -95,9 +126,9 @@ class TransitEngine:
         return list(self.disabled_lines)
 
     def find_path(self, start_node_id, end_node_id):
-        """Shortest path with transfer penalty.
+        """Shortest path with transfer penalty using A* search.
         Adds TRANSFER_PENALTY meters to cost each time the line changes,
-        so paths with fewer line switches are preferred if distance is similar.
+        so paths with fewer line switches are preferred if distances are similar.
         """
         TRANSFER_PENALTY = 300  # metres — tolerate up to 300 m extra to avoid 1 transfer
         INF = float('inf')
@@ -106,7 +137,6 @@ class TransitEngine:
             return {"success": True, "path": [start_node_id], "details": [], "total_distance": 0}
 
         # Build adjacency list restricted to active edges
-        # adj[node] = [(neighbor, line, length, edge_data), ...]
         adj = {}
         for u, v, d in self.graph.edges(data=True):
             if self._is_edge_disabled(d):
@@ -117,59 +147,67 @@ class TransitEngine:
                 adj.setdefault(u, []).append((v, line, length, d))
                 adj.setdefault(v, []).append((u, line, length, d))
 
-        # State: (node_id, current_line)
-        # heap entry: (cost, counter, node, current_line)
-        dist = {}   # state -> penalised cost
-        prev = {}   # state -> (prev_node, prev_line, edge_data, used_line)
-        counter = 0
-        heap = []
-
-        # Seed: one entry per line available at start node
         start_lines = {ln for (_, ln, _, _) in adj.get(start_node_id, [])}
         if not start_lines:
             return {"success": False, "error": "Start node has no active connections"}
 
+        g_score = {}
+        prev = {}
+        heap = []
+        h_cache = {}
+        counter = 0
+        target_h = self.heuristic(start_node_id, end_node_id)
+        h_cache[start_node_id] = target_h
+
         for line in start_lines:
             state = (start_node_id, line)
-            dist[state] = 0
+            g_score[state] = 0
             prev[state] = None
-            heapq.heappush(heap, (0, counter, start_node_id, line))
+            heapq.heappush(heap, (target_h, counter, start_node_id, line))
             counter += 1
 
         visited = set()
+        best_state = None
 
         while heap:
-            cost, _, node, cur_line = heapq.heappop(heap)
+            f_cost, _, node, cur_line = heapq.heappop(heap)
             state = (node, cur_line)
             if state in visited:
                 continue
             visited.add(state)
 
             if node == end_node_id:
+                best_state = state
                 break
 
+            current_g = g_score[state]
             for nbr, next_line, length, edge_data in adj.get(node, []):
                 penalty = TRANSFER_PENALTY if next_line != cur_line else 0
-                new_cost = cost + length + penalty
+                tentative_g = current_g + length + penalty
                 nstate = (nbr, next_line)
-                if new_cost < dist.get(nstate, INF):
-                    dist[nstate] = new_cost
+
+                if tentative_g < g_score.get(nstate, INF):
+                    g_score[nstate] = tentative_g
                     prev[nstate] = (node, cur_line, edge_data, next_line)
-                    heapq.heappush(heap, (new_cost, counter, nbr, next_line))
+                    h = h_cache.get(nbr)
+                    if h is None:
+                        h = self.heuristic(nbr, end_node_id)
+                        h_cache[nbr] = h
+                    f_score = tentative_g + h
+                    heapq.heappush(heap, (f_score, counter, nbr, next_line))
                     counter += 1
 
-        # Pick the best arriving state at end_node
-        best_cost = INF
-        best_state = None
-        for (node, line), c in dist.items():
-            if node == end_node_id and c < best_cost:
-                best_cost = c
-                best_state = (node, line)
+        if best_state is None:
+            # If A* terminated without reaching goal, fall back to best known end state
+            best_cost = INF
+            for (node, line), c in g_score.items():
+                if node == end_node_id and c < best_cost:
+                    best_cost = c
+                    best_state = (node, line)
 
         if best_state is None:
             return {"success": False, "error": "No path found (lines might be disabled)"}
 
-        # Reconstruct path backwards
         details = []
         path_nodes = []
         state = best_state
@@ -178,12 +216,8 @@ class TransitEngine:
             node, line = state
             prev_node, prev_line, edge_data, used_line = prev[state]
             length = edge_data.get('length', 0)
-            # Get geometry from edge data, with direction awareness
             edge_geometry = edge_data.get('geometry', [])
-            # If the edge is stored source->target but we traverse target->source,
-            # reverse the geometry so coordinates flow in the correct direction.
             if edge_geometry and len(edge_geometry) > 1:
-                # Check if geometry starts closer to prev_node
                 prev_lat = self.graph.nodes[prev_node].get('lat', 0)
                 prev_lon = self.graph.nodes[prev_node].get('lon', 0)
                 geo_start = edge_geometry[0]

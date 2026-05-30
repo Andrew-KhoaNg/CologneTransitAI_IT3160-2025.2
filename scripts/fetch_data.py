@@ -4,6 +4,7 @@ import json
 import os
 import hashlib
 from collections import defaultdict, deque, Counter
+from shapely.geometry import LineString, MultiLineString
 
 UNKNOWN_LINE = "Unknown Line"
 
@@ -113,21 +114,50 @@ def fetch_cologne_transit():
                 "lon": data.get('x'),
                 "name": data.get('name', f"Station {node}")
             })
-            
+
         edges_data = []
+
+        def serialize_geometry(geom):
+            if geom is None:
+                return []
+
+            coords = []
+            if isinstance(geom, LineString):
+                coords = list(geom.coords)
+            elif isinstance(geom, MultiLineString):
+                for part in geom.geoms:
+                    coords.extend(list(part.coords))
+            elif isinstance(geom, (list, tuple)):
+                coords = list(geom)
+            else:
+                return []
+
+            result = []
+            for point in coords:
+                if len(point) < 2:
+                    continue
+                x, y = float(point[0]), float(point[1])
+                if abs(x) <= 90 and abs(y) <= 180 and abs(x) > 20 and abs(y) < 20:
+                    lat, lon = x, y
+                else:
+                    lat, lon = y, x
+                result.append([lat, lon])
+            return result
+
         for u, v, data in G.edges(data=True):
             # Lấy tên tuyến (ví dụ: Line 1, S11, ...)
             # Trong OSM, railway lines thường có tag 'route' hoặc 'ref'
             line_name = data.get('ref', data.get('name', UNKNOWN_LINE))
-            
+
             # Tính khoảng cách (độ dài cạnh)
             length = data.get('length', 0)
-            
+
             edges_data.append({
                 "source": u,
                 "target": v,
                 "line": line_name,
                 "length": length,
+                "geometry": serialize_geometry(data.get('geometry')),
                 "oneway": data.get('oneway', False)
             })
 

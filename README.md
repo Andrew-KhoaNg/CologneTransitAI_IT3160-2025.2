@@ -1,18 +1,24 @@
 # 🚇 Cologne Transit AI
 
-> Hệ thống tìm đường đi ngắn nhất cho mạng lưới giao thông công cộng tại **Cologne (Köln), Đức**.  
-> Dự án sử dụng dữ liệu thực từ OpenStreetMap, thuật toán Dijkstra có heuristic chuyển tuyến, và giao diện bản đồ tương tác.
+> Ứng dụng tìm tuyến giao thông công cộng cho mạng lưới Cologne (Köln), Đức.
+> Backend Python/Flask, frontend Leaflet, dữ liệu OSM và thuật toán A* theo trạng thái `(node_id, current_line)` với phí chuyển tuyến.
 
 ---
 
 ## 📌 Mô tả dự án
 
-Cologne Transit AI là một ứng dụng web full-stack cho phép:
+Cologne Transit AI là một hệ thống web full-stack cho phép:
 
-- **Người dùng (User):** Chọn 2 trạm bất kỳ trên bản đồ → Hệ thống tự động tìm và hiển thị **đường đi ngắn nhất** kèm **lộ trình chi tiết** (đi tuyến nào, từ trạm nào đến trạm nào).
-- **Quản trị viên (Admin):** Bật/tắt từng tuyến tàu theo 3 nhóm (Rail / Sub / Train) để **mô phỏng sự cố hoặc bảo trì**, hệ thống sẽ tự tính lại đường đi tránh tuyến bị vô hiệu hóa.
+- **Người dùng:** Chọn điểm đi và điểm đến trên bản đồ, hệ thống sẽ tính và hiển thị **lộ trình tối ưu** cùng **chi tiết từng đoạn đi**.
+- **Quản trị viên:** Bật/tắt các tuyến `Rail`, `Sub` và `Train` để mô phỏng tình huống bảo trì, sự cố hoặc tuyến bị đóng cửa.
 
-Dữ liệu mạng lưới giao thông (**3.634 trạm, 4.744 đoạn đường**) được thu thập trực tiếp từ **OpenStreetMap** thông qua thư viện `osmnx`.
+Dữ liệu mạng lưới được xây dựng từ **OpenStreetMap** bởi `osmnx`, bao gồm cả:
+
+- danh sách trạm (`nodes`) với toạ độ địa lý
+- danh sách cạnh (`edges`) với độ dài và `geometry` thực tế
+- nhiều tuyến qua cùng một cạnh
+
+Hệ thống pathfinding hiện dùng **thuật toán A*** với trạng thái mở rộng là `(node_id, current_line)` để giữ cơ chế **transfer penalty** và đảm bảo đầu ra JSON không đổi.
 
 ---
 
@@ -119,9 +125,10 @@ Truy cập: [http://localhost:5000](http://localhost:5000)
 | Thành phần | Công nghệ |
 |-----------|-----------|
 | Backend API | Python 3.10+, Flask, Flask-CORS |
-| Thuật toán đồ thị | Custom Dijkstra với Transfer Penalty (heapq) |
+| Thuật toán đồ thị | Custom A* với trạng thái `(node_id, current_line)` và Transfer Penalty |
+| Thuật toán heuristic | Haversine distance để ước lượng khoảng cách trực tiếp đến đích |
 | Thu thập dữ liệu OSM | OSMnx, GeoPandas |
-| Frontend Map | Leaflet.js (tile CARTO dark/light) |
+| Frontend Map | Leaflet.js với bản đồ CARTO dark/light |
 | Giao diện | HTML + Vanilla CSS (Flex layout, Dark/Light mode) |
 | Fonts | Google Fonts — Inter |
 | Package manager | uv |
@@ -130,15 +137,32 @@ Truy cập: [http://localhost:5000](http://localhost:5000)
 
 ## 🧠 Thuật toán Pathfinding
 
-Dự án sử dụng **Dijkstra mở rộng theo trạng thái `(node, line)`**:
+Hệ thống hiện sử dụng **thuật toán A*** trên không gian trạng thái `(node_id, current_line)` để vừa giữ chi phí chuyển tuyến, vừa tận dụng heuristic địa lý.
 
-- **State space**: mỗi nút có nhiều trạng thái, mỗi trạng thái ứng với một tuyến tàu đang đi
-- **Transfer Penalty**: mỗi lần đổi tuyến cộng thêm **300m** vào chi phí
-- **Kết quả**: nếu 2 đường có khoảng cách gần tương đương, ưu tiên đường **ít chuyển tuyến hơn**
+- **State space**: mỗi trạm được mô tả bởi trạng thái hiện tại của tuyến đang đi.
+- **Chi phí thực tế (g(n))**: tổng độ dài cạnh + **TRANSFER_PENALTY = 300m** mỗi khi đổi tuyến.
+- **Heuristic (h(n))**: khoảng cách Haversine giữa trạm hiện tại và trạm đích.
+- **Ưu tiên**: `f(n) = g(n) + h(n)` giúp A* mở rộng các trạng thái gần đích trước.
 
-```
-cost(edge) = edge.length + (300m nếu đổi tuyến, 0 nếu giữ nguyên)
-```
+### Tại sao A* và không đổi cấu trúc đường đi
+
+- Giữ nguyên đầu ra JSON của `/api/find-path` và cấu trúc `details`.
+- Vẫn xử lý đúng `disabled lines`, `line classification`, `route history` và `geometry reconstruction`.
+- Không thay đổi schema hoặc cách đường đi được tái tạo từ các cạnh.
+
+### 🔍 Ưu điểm của heuristic Haversine
+
+Heuristic Haversine là **admissible** vì:
+
+- Nó là khoảng cách thẳng giữa hai toạ độ địa lý;
+- Mạng lưới đường sắt không thể ngắn hơn đường thẳng này;
+- Nó không tính thêm penalty chuyển tuyến, nên luôn là một lower bound cho chi phí còn lại.
+
+### ⚡ Hiệu suất
+
+- Trong trường hợp xấu nhất, A* vẫn có độ phức tạp O(E + V log V) với heap, giống Dijkstra.
+- Heuristic Haversine giúp giảm số trạng thái mở rộng so với tìm kiếm không có hướng dẫn.
+- Khi start/end cách xa nhau, A* tập trung mở rộng các nhánh tiến về đích và cắt tỉa nhiều đường không cần thiết.
 
 ---
 
