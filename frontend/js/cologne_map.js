@@ -13,10 +13,15 @@ window._lightTile = null;
 window._tileLayer = null;
 
 // ===== Color by line_type (from backend classify_line) =====
+// Must match the 3 categories returned by engine.py classify_line():
+//   'rail'  — named infrastructure (Innenstadttunnel, SB-Nord …)
+//   'sub'   — KVB Stadtbahn 1-99, U-lines, 22a/24a variants
+//   'train' — 4-digit OSM relation IDs (S-Bahn / Regional)
 const LINE_COLORS = {
-    rail:  '#0085c8',   // xanh lam-lục  (Rail / named lines)
-    sub:   '#00c666',   // xanh lá       (Sub  / KVB Stadtbahn 1-99)
-    train: '#ffd600',   // vàng           (Train / regional 4-digit)
+    rail:  '#0085c8',   // xanh dương     (Rail / others)
+    sub:   '#00c666',   // xanh lá        (Sub  / KVB Stadtbahn 1-99)
+    train: '#ffd600',   // vàng           (Train / regional routes)
+    walk:  '#9e9e9e',   // xám            (Walk)
 };
 
 const INACTIVE_COLOR = '#3d444d';
@@ -148,59 +153,123 @@ function renderNetwork() {
             coords = [[u.lat, u.lon], [v.lat, v.lon]];
         }
 
-        L.polyline(coords, { color, weight, opacity }).addTo(map);
+        const dashArray = edge.line_type === 'walk' ? '5, 5' : null;
+        L.polyline(coords, { color, weight, opacity, dashArray }).addTo(map);
     });
 
     // Draw station markers
     networkData.nodes.forEach(node => {
         const marker = L.circleMarker([node.lat, node.lon], {
-            radius: 4,
+            radius: 7,
             fillColor: '#ffffff',
             color: '#00000040',
-            weight: 1,
+            weight: 2,
             fillOpacity: 0.9
         }).addTo(map);
 
         marker.bindPopup(
-            `<b style="font-family:Inter,sans-serif;">${node.name}</b>` +
-            `<br><span style="font-size:0.8em;color:#888;">ID: ${node.id}</span>`
+            `<b style="font-family:Inter,sans-serif;">${node.name}</b>`
         );
         marker.on('click', () => selectNode(node));
         markers[node.id] = marker;
     });
+
+    populateStationDropdowns();
+}
+
+function populateStationDropdowns() {
+    const startSelect = document.getElementById('start-select');
+    const endSelect = document.getElementById('end-select');
+    
+    if (!startSelect || !endSelect) return;
+
+    let optionsHTML = '<option value="" disabled selected>Chọn trạm...</option>';
+
+    // Sort nodes alphabetically (safeguard against missing names)
+    const sortedNodes = [...networkData.nodes].sort((a, b) => {
+        const nameA = a.name || "";
+        const nameB = b.name || "";
+        return nameA.localeCompare(nameB);
+    });
+
+    sortedNodes.forEach(node => {
+        optionsHTML += `<option value="${node.id}">${node.name}</option>`;
+    });
+
+    startSelect.innerHTML = optionsHTML;
+    endSelect.innerHTML = optionsHTML;
+
+    // Add event listeners (if not already added)
+    if (!startSelect.dataset.listenerAdded) {
+        startSelect.addEventListener('change', handleDropdownChange);
+        endSelect.addEventListener('change', handleDropdownChange);
+        startSelect.dataset.listenerAdded = 'true';
+    }
+}
+
+function handleDropdownChange(e) {
+    const isStart = e.target.id === 'start-select';
+    const nodeId = e.target.value;
+    const node = networkData.nodes.find(n => String(n.id) === String(nodeId));
+    if (!node) return;
+
+    if (isStart) {
+        if (selectedStart && markers[selectedStart.id]) {
+            markers[selectedStart.id].setStyle({ fillColor: '#ffffff', radius: 7, weight: 2 });
+        }
+        selectedStart = node;
+        markers[node.id].setStyle({ fillColor: '#28a745', radius: 12, weight: 3 });
+    } else {
+        if (selectedEnd && markers[selectedEnd.id]) {
+            markers[selectedEnd.id].setStyle({ fillColor: '#ffffff', radius: 7, weight: 2 });
+        }
+        selectedEnd = node;
+        markers[node.id].setStyle({ fillColor: PATH_COLOR, radius: 12, weight: 3 });
+    }
+
+    if (selectedStart && selectedEnd) {
+        findPath();
+    }
 }
 
 // ===== Selection =====
 function selectNode(node) {
     if (!selectedStart) {
         selectedStart = node;
-        document.getElementById('startInfo').innerText = node.name;
-        markers[node.id].setStyle({ fillColor: '#28a745', radius: 9, weight: 2 });
+        const startSelect = document.getElementById('start-select');
+        if (startSelect) startSelect.value = node.id;
+        markers[node.id].setStyle({ fillColor: '#28a745', radius: 12, weight: 3 });
 
     } else if (!selectedEnd) {
         selectedEnd = node;
-        document.getElementById('endInfo').innerText = node.name;
-        markers[node.id].setStyle({ fillColor: PATH_COLOR, radius: 9, weight: 2 });
+        const endSelect = document.getElementById('end-select');
+        if (endSelect) endSelect.value = node.id;
+        markers[node.id].setStyle({ fillColor: PATH_COLOR, radius: 12, weight: 3 });
         findPath();
 
     } else {
         resetSelection();
         selectedStart = node;
-        document.getElementById('startInfo').innerText = node.name;
-        markers[node.id].setStyle({ fillColor: '#28a745', radius: 9, weight: 2 });
+        const startSelect = document.getElementById('start-select');
+        if (startSelect) startSelect.value = node.id;
+        markers[node.id].setStyle({ fillColor: '#28a745', radius: 12, weight: 3 });
     }
 }
 
 function resetSelection() {
     if (selectedStart && markers[selectedStart.id])
-        markers[selectedStart.id].setStyle({ fillColor: '#ffffff', radius: 4, weight: 1 });
+        markers[selectedStart.id].setStyle({ fillColor: '#ffffff', radius: 7, weight: 2 });
     if (selectedEnd && markers[selectedEnd.id])
-        markers[selectedEnd.id].setStyle({ fillColor: '#ffffff', radius: 4, weight: 1 });
+        markers[selectedEnd.id].setStyle({ fillColor: '#ffffff', radius: 7, weight: 2 });
 
     selectedStart = null;
     selectedEnd   = null;
-    document.getElementById('startInfo').innerText = '\u2014';
-    document.getElementById('endInfo').innerText   = '\u2014';
+    
+    const startSelect = document.getElementById('start-select');
+    const endSelect = document.getElementById('end-select');
+    if (startSelect) startSelect.value = '';
+    if (endSelect) endSelect.value = '';
+
     document.getElementById('distInfo').innerText  = '\u2014';
 
     if (pathLayer) { pathLayer.remove(); pathLayer = null; }
@@ -276,15 +345,52 @@ async function findPath() {
 
 // ===== Itinerary Renderer =====
 function classifyLine(lineName) {
-    if (!lineName || lineName === 'Unknown Line') return 'sub';
-    const n = parseInt(lineName, 10);
-    if (isNaN(n)) return 'rail';          // named lines (Innenstadttunnel, SB-Nord …)
-    if (n >= 1 && n <= 99) return 'sub'; // KVB Stadtbahn
-    return 'train';                       // 4-digit regional
+    if (!lineName || lineName === 'Unknown Line') return 'rail';
+    const name = String(lineName).trim();
+    if (name === 'Walk') return 'walk';
+    const upper = name.toUpperCase();
+
+    // 1. FIRST PRIORITY (Sub)
+    if (upper.startsWith('U')) return 'sub';
+    const m = name.match(/^(\d{1,2})[a-zA-Z]$/);
+    if (m && parseInt(m[1], 10) >= 1 && parseInt(m[1], 10) <= 99) return 'sub';
+    
+    const n = parseInt(name, 10);
+    if (!isNaN(n) && String(n) === name) {
+        if (n >= 1 && n <= 99) return 'sub';
+    }
+    if (/^\d+$/.test(name)) {
+        if (n >= 1 && n <= 99) return 'sub';
+    }
+
+    // 2. SECOND PRIORITY (Train)
+    if (/^(S|RE|RB)\s*\d+/.test(upper)) return 'train';
+    if (!isNaN(n) && String(n) === name) {
+        if (n >= 1000 && n <= 9999) return 'train';
+    }
+    if (/^\d+$/.test(name)) {
+        if (n >= 1000 && n <= 9999) return 'train';
+    }
+    if (upper === "REGIONAL/S-BAHN" || upper === "TRAIN TRACK") return 'train';
+
+    // 3. THIRD PRIORITY (Rail)
+    if (upper === "TRAM TRACK" || upper === "LIGHT RAIL TRACK" || upper.includes("TRAM")) {
+        return 'rail';
+    }
+    const alphaStart = upper.match(/^([A-Z]+)/);
+    if (alphaStart) {
+        const prefix = alphaStart[1];
+        if (!['S', 'U', 'RE', 'RB'].includes(prefix)) {
+            return 'rail';
+        }
+    }
+
+    // 4. FALLBACK
+    return 'train';
 }
 
-const TYPE_LABEL = { rail: 'Rail', sub: 'Sub', train: 'Train' };
-const TYPE_ICON  = { rail: '\uD83D\uDEE4', sub: '\uD83D\uDE87', train: '\uD83D\uDE86' };
+const TYPE_LABEL = { rail: 'Rail', sub: 'Sub', train: 'Train', walk: 'Walk' };
+const TYPE_ICON  = { rail: '🚇', sub: '🚇', train: '🚆', walk: '🚶' };
 
 function renderItinerary(details) {
     const box   = document.getElementById('route-details-box');
@@ -323,10 +429,13 @@ function renderItinerary(details) {
         const el = document.createElement('div');
         el.className = 'route-step';
         el.style.setProperty('--seg-color', color);
+        
+        const lineText = seg.type === 'walk' ? 'Đi bộ' : `Tuy&#7871;n ${seg.line}`;
+        
         el.innerHTML = `
             <div class="step-header" style="background:${color};">
                 <span class="step-type-icon">${TYPE_ICON[seg.type]}</span>
-                <span class="step-line-name">${TYPE_LABEL[seg.type]} &bull; Tuy&#7871;n ${seg.line}</span>
+                <span class="step-line-name">${TYPE_LABEL[seg.type]} &bull; ${lineText}</span>
                 <span class="step-km">${km} km</span>
             </div>
             <div class="step-route">
@@ -363,15 +472,16 @@ async function loadLineControls() {
         return;
     }
 
-    // Group by type
+    // Group by type (must match backend classify_line output: rail / sub / train)
     const groups = { rail: [], sub: [], train: [] };
     linesData.all_lines.forEach(line => {
-        const t = line.type || 'sub';
+        const t = line.type || 'rail';
         if (groups[t]) groups[t].push(line);
+        else groups.rail.push(line);  // fallback for any unknown type
     });
 
     const groupMeta = {
-        rail:  { label: '🛤 Rail',  color: LINE_COLORS.rail,  desc: 'Đường sắt khu vực' },
+        rail:  { label: '🚇 Rail',  color: LINE_COLORS.rail,  desc: 'Tàu điện ngầm/Khác' },
         sub:   { label: '🚇 Sub',   color: LINE_COLORS.sub,   desc: 'KVB Stadtbahn' },
         train: { label: '🚆 Train', color: LINE_COLORS.train, desc: 'Tàu vùng (Regional)' },
     };
@@ -385,13 +495,37 @@ async function loadLineControls() {
         // Group header
         const header = document.createElement('div');
         header.className = 'line-group-header';
+        const allDisabled = lines.every(line => linesData.disabled_lines.includes(line.name));
         header.innerHTML = `
             <span class="group-dot" style="background:${meta.color};box-shadow:0 0 8px ${meta.color}88;"></span>
             <span class="group-label">${meta.label}</span>
             <span class="group-desc">${meta.desc} (${lines.length})</span>
+            <label class="switch" style="margin-left: auto; margin-right: 10px;" title="Toggle all ${meta.label} lines">
+                <input type="checkbox" class="master-switch" ${allDisabled ? '' : 'checked'}>
+                <span class="slider"></span>
+            </label>
             <button class="btn-group-toggle" onclick="toggleGroup('${type}', this)">▼</button>
         `;
         container.appendChild(header);
+
+        const masterSwitch = header.querySelector('.master-switch');
+        masterSwitch.addEventListener('change', async (e) => {
+            const isActive = e.target.checked;
+            try {
+                await Promise.all(lines.map(line => TransitAPI.toggleLine(line.name, !isActive)));
+                await refreshNetwork();
+                if (selectedStart && selectedEnd) findPath();
+                
+                const wrapper = document.getElementById(`group-${type}`);
+                if (wrapper) {
+                    const childSwitches = wrapper.querySelectorAll('input[type="checkbox"]');
+                    childSwitches.forEach(sw => sw.checked = isActive);
+                }
+            } catch (error) {
+                alert(error.message);
+                await refreshAdminState();
+            }
+        });
 
         // Line items wrapper
         const wrapper = document.createElement('div');
